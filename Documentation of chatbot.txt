@@ -1,0 +1,149 @@
+Project Documentation: FastFoodFeel.pk ChatBot (n8n Knowledge Base Agent)
+
+1. Project Overview
+
+This project is an automated AI Customer Service Agent for FastFoodFeel.pk, built using an n8n workflow. Its primary function is to provide instant, accurate responses to customer queries based exclusively on a set of internal company documents (FAQ, Menu, Contact Sheet).
+
+The workflow is divided into two main, independent processes:
+
+Document Ingestion Pipeline: A scheduled process that monitors a Google Drive folder, downloads new or updated documents, processes them, and updates the knowledge base (a Supabase Vector Store).
+
+Customer Chat Agent: A webhook-triggered process that listens for incoming chat messages, uses an AI Agent to retrieve relevant context from the knowledge base, and generates a factual response.
+
+2. Document Ingestion Pipeline (Data Workflow)
+
+This part of the workflow runs hourly to ensure the AI Agent always has the latest company information.
+
+A. Trigger: Google Drive Trigger
+
+Purpose: Initiates the workflow upon file creation in a specific Google Drive folder.
+
+Settings:
+
+Poll Time: everyHour
+
+Trigger On: specificFolder
+
+Folder Watched: 1-mLAomO83JM7JbvHP1kDPmTMkT7B_xcc (Named "FastFood")
+
+Event: fileCreated
+
+Function: Automatically checks the specified Google Drive folder for any new files (documents, spreadsheets, or PDFs).
+
+B. Data Preparation: Edit Fields (Set Values)
+
+Purpose: Extracts and standardizes key metadata from the Google Drive trigger output.
+
+Fields Set:
+
+file_id: ={{ $json.id }} (The unique ID of the document)
+
+version: 1 (A hardcoded initial version)
+
+modified: ={{ $json.modifiedTime }} (The last modified timestamp)
+
+file_type: ={{ $json.mimeType }} (The MIME type, e.g., Google Doc, PDF)
+
+C. File Handling: Download file
+
+Purpose: Downloads the raw content of the detected file.
+
+Settings:
+
+Operation: download
+
+File ID: ={{ $json.file_id }}
+
+Google File Conversion: For Google Docs (application/vnd.google-apps.document), the content is converted to text/plain to ensure clean ingestion.
+
+D. Document Routing: Switch
+
+Purpose: Routes the downloaded file content to the appropriate file extraction node based on its type (file_type).
+
+Conditions/Outputs:
+
+Output text: If file_type equals application/vnd.google-apps.document.
+
+Output cvs: If file_type equals application/vnd.google-apps.spreadsheet.
+
+Output pdf: If file_type equals application/vnd.google-apps.pdf.
+
+E. Content Extraction (Extract from File Nodes)
+
+Purpose: Converts the raw downloaded file data into structured text documents for the knowledge base.
+
+Extract from Text File: Handles Google Docs (converted to plain text).
+
+Extract from CVS: Handles Google Spreadsheets/CSV files.
+
+Extract from PDF: Handles PDF files.
+
+F. Embedding and Storage
+
+Embeddings Google Gemini: A node that uses the Google Gemini (PaLM) API credentials to convert the processed text documents into high-dimensional vectors (embeddings). This step is crucial for semantic search.
+
+Default Data Loader: Adds the metadata collected in step B (file_id, version, modified) to the vectorized documents.
+
+Supabase Vector Store:
+
+Purpose: Stores the final, vectorized documents and their metadata in a vector database.
+
+Operation: insert
+
+Table Name: fastfoodfeeldocuments
+
+Function: This node makes the company's knowledge searchable by the AI Agent.
+
+3. Customer Chat Agent (Live Service Workflow)
+
+This part of the workflow is triggered by an external chat message and handles the live customer interaction.
+
+A. Trigger: When chat message received
+
+Purpose: Acts as a webhook endpoint, initiating the workflow whenever an external chat message is received.
+
+Settings: mode: webhook, public: true.
+
+B. Context and Memory: Simple Memory
+
+Purpose: Provides conversational memory, allowing the AI agent to recall previous turns in the conversation.
+
+Type: Buffer Window (maintains a rolling history of the last N messages).
+
+C. Language Model: Google Gemini Chat Model
+
+Purpose: Defines the Large Language Model used for generating the final customer response.
+
+Model: Assumes a Gemini/PaLM chat model (credentials used are for Google Gemini(PaLM) Api).
+
+D. Knowledge Retrieval Tool: Supabase Vector Store
+
+Purpose: Defines the tool the AI Agent can use to access the corporate knowledge base.
+
+Settings:
+
+Mode: retrieve-as-tool
+
+Tool Description: "this vector store stores all the companey's product infomation."
+
+Tool Name (Query): product_knowledge_base
+
+Table Name: fastfoodfeeldocuments (the same table used in the ingestion pipeline).
+
+Function: When the AI Agent receives a question, it can choose to use this tool to search the knowledge base for relevant facts before formulating an answer.
+
+Embedding Model: Uses a separate Embeddings Google Gemini1 node to convert the incoming customer query into an embedding vector for the Supabase search.
+
+E. AI Agent (Core Logic)
+
+Purpose: The central intelligence node that orchestrates the memory, tools, and LLM to generate the final response.
+
+Key Instruction (systemMessage): This is the MANDATORY operational persona:
+
+Persona: FastFoodFeel Pakistan FAQ Agent.
+
+Core Constraint: Must rely EXCLUSIVELY on the provided documents.
+
+Tone: Helpful, friendly, and efficient.
+
+Instructions: Details how to answer (cite prices, addresses exactly) and, critically, how to handle missing information (apologize, state it's missing, and direct to the feedback@fastfoodfeel.pk email).
